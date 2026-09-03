@@ -5,8 +5,37 @@ import Login from "./Login";
 
 const DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
+const MODALIDADES = ["PVB", "Mapple", "Particular"];
+
+const PLANOS = [
+  { id: "mensal", label: "Mensal", meses: 1 },
+  { id: "trimestral", label: "Trimestral", meses: 3 },
+  { id: "semestral", label: "Semestral", meses: 6 },
+];
+
+function planoInfo(id) {
+  return PLANOS.find((p) => p.id === id) || PLANOS[0];
+}
+
+// diferença em meses entre duas strings "YYYY-MM" (b - a)
+function diffMeses(mesA, mesB) {
+  const [anoA, mA] = mesA.split("-").map(Number);
+  const [anoB, mB] = mesB.split("-").map(Number);
+  return (anoB - anoA) * 12 + (mB - mA);
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// converte config antiga (valoresPorDias, sem planos) para o novo formato (valoresPorPlano)
+function migrarConfig(cfg) {
+  if (!cfg) return { diaVencimento: 10, valoresPorPlano: {} };
+  if (cfg.valoresPorPlano) return cfg;
+  if (cfg.valoresPorDias) {
+    return { diaVencimento: cfg.diaVencimento || 10, valoresPorPlano: { mensal: cfg.valoresPorDias } };
+  }
+  return { diaVencimento: cfg.diaVencimento || 10, valoresPorPlano: {} };
 }
 
 function calcIdade(dataNasc) {
@@ -48,7 +77,7 @@ function EstudioApp({ onSair }) {
   const [contratos, setContratosState] = useState([]);
   const [despesas, setDespesasState] = useState([]);
   const [despesasFixas, setDespesasFixasState] = useState([]);
-  const [config, setConfigState] = useState({ diaVencimento: 10, valoresPorDias: {} });
+  const [config, setConfigState] = useState({ diaVencimento: 10, valoresPorPlano: {} });
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState("");
 
@@ -98,9 +127,9 @@ function EstudioApp({ onSair }) {
       }
       try {
         const cfg = await storage.get("config");
-        setConfigState(cfg ? JSON.parse(cfg.value) : { diaVencimento: 10, valoresPorDias: {} });
+        setConfigState(cfg ? migrarConfig(JSON.parse(cfg.value)) : { diaVencimento: 10, valoresPorPlano: {} });
       } catch {
-        setConfigState({ diaVencimento: 10, valoresPorDias: {} });
+        setConfigState({ diaVencimento: 10, valoresPorPlano: {} });
       }
       setLoading(false);
     })();
@@ -238,6 +267,7 @@ function EstudioApp({ onSair }) {
         ) : tab === "pagamentos" ? (
           <PagamentosView
             alunas={alunas}
+            turmas={turmas}
             pagamentos={pagamentos}
             setPagamentos={(v) => persist("pagamentos", v, setPagamentosState)}
             config={config}
@@ -268,9 +298,10 @@ function TurmasView({ turmas, setTurmas, alunas }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(emptyTurma());
+  const [filtroModalidade, setFiltroModalidade] = useState("");
 
   function emptyTurma() {
-    return { nome: "", faixaEtaria: "", horarios: [{ dia: DIAS[0], horario: "" }], professora: "", capacidade: "" };
+    return { nome: "", faixaEtaria: "", horarios: [{ dia: DIAS[0], horario: "" }], professora: "", capacidade: "", modalidade: "PVB" };
   }
 
   function openNew() {
@@ -286,6 +317,7 @@ function TurmasView({ turmas, setTurmas, alunas }) {
       horarios: t.horarios && t.horarios.length ? t.horarios : [{ dia: DIAS[0], horario: "" }],
       professora: t.professora,
       capacidade: t.capacidade,
+      modalidade: t.modalidade || "PVB",
     });
     setEditId(t.id);
     setShowForm(true);
@@ -352,6 +384,12 @@ function TurmasView({ turmas, setTurmas, alunas }) {
               <label>Capacidade máxima (por sessão)</label>
               <input type="number" min="1" value={form.capacidade} onChange={(e) => setForm({ ...form, capacidade: e.target.value })} placeholder="Ex.: 12" />
             </div>
+            <div>
+              <label>Modalidade</label>
+              <select value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })}>
+                {MODALIDADES.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
           </div>
 
           <div style={{ marginTop: 16 }}>
@@ -379,16 +417,39 @@ function TurmasView({ turmas, setTurmas, alunas }) {
         </div>
       )}
 
+      {turmas.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+          {["", ...MODALIDADES].map((m) => (
+            <button
+              key={m || "todas"}
+              onClick={() => setFiltroModalidade(m)}
+              style={{
+                border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+                background: filtroModalidade === m ? "#2E2A2C" : "#F1EDE8",
+                color: filtroModalidade === m ? "#fff" : "#6B615D",
+              }}
+            >
+              {m || "Todas"}
+            </button>
+          ))}
+        </div>
+      )}
+
       {turmas.length === 0 && !showForm ? (
         <EmptyState text="Nenhuma turma cadastrada ainda. Comece adicionando a primeira." />
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {turmas.map((t) => {
+          {turmas.filter((t) => !filtroModalidade || (t.modalidade || "PVB") === filtroModalidade).map((t) => {
             const horarios = t.horarios || [];
             return (
               <div key={t.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>{t.nome}</div>
+                  <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                    {t.nome}
+                    <span style={{ fontSize: 11, fontWeight: 600, background: "#F1EDE8", color: "#8B4A5C", borderRadius: 20, padding: "2px 9px" }}>
+                      {t.modalidade || "PVB"}
+                    </span>
+                  </div>
                   <div style={{ fontSize: 13, color: "#6B615D", marginTop: 3 }}>
                     {t.faixaEtaria && `${t.faixaEtaria} · `}
                     {horarios.map((h) => `${h.dia}${h.horario ? ` ${h.horario}` : ""}`).join(" · ")}
@@ -428,11 +489,12 @@ function AlunasView({ alunas, setAlunas, turmas }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [filtroTurma, setFiltroTurma] = useState("");
+  const [filtroModalidade, setFiltroModalidade] = useState("");
   const [busca, setBusca] = useState("");
   const [form, setForm] = useState(emptyAluna());
 
   function emptyAluna() {
-    return { nome: "", responsavel: "", contato: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "" };
+    return { nome: "", responsavel: "", contato: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
   }
 
   function openNew() {
@@ -451,6 +513,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
       diasFrequenta: a.diasFrequenta || [],
       desconto: a.desconto || "",
       descontoMotivo: a.descontoMotivo || "",
+      plano: a.plano || "mensal",
     });
     setEditId(a.id);
     setShowForm(true);
@@ -491,6 +554,10 @@ function AlunasView({ alunas, setAlunas, turmas }) {
 
   const visiveis = alunas.filter((a) => {
     if (filtroTurma && a.turmaId !== filtroTurma) return false;
+    if (filtroModalidade) {
+      const turmaDaAluna = turmas.find((t) => t.id === a.turmaId);
+      if ((turmaDaAluna?.modalidade || "PVB") !== filtroModalidade) return false;
+    }
     if (busca && !a.nome.toLowerCase().includes(busca.toLowerCase())) return false;
     return true;
   });
@@ -527,9 +594,15 @@ function AlunasView({ alunas, setAlunas, turmas }) {
                 <option value="">Sem turma definida</option>
                 {turmas.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.nome} · {(t.horarios || []).map((h) => h.dia).join(" e ")}
+                    [{t.modalidade || "PVB"}] {t.nome} · {(t.horarios || []).map((h) => h.dia).join(" e ")}
                   </option>
                 ))}
+              </select>
+            </div>
+            <div>
+              <label>Plano de pagamento</label>
+              <select value={form.plano} onChange={(e) => setForm({ ...form, plano: e.target.value })}>
+                {PLANOS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             </div>
           </div>
@@ -582,13 +655,30 @@ function AlunasView({ alunas, setAlunas, turmas }) {
       )}
 
       {alunas.length > 0 && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          <input style={{ maxWidth: 220 }} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome..." />
-          <select style={{ maxWidth: 240 }} value={filtroTurma} onChange={(e) => setFiltroTurma(e.target.value)}>
-            <option value="">Todas as turmas</option>
-            {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
-          </select>
-        </div>
+        <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+            {["", ...MODALIDADES].map((m) => (
+              <button
+                key={m || "todas"}
+                onClick={() => setFiltroModalidade(m)}
+                style={{
+                  border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+                  background: filtroModalidade === m ? "#2E2A2C" : "#F1EDE8",
+                  color: filtroModalidade === m ? "#fff" : "#6B615D",
+                }}
+              >
+                {m || "Todas"}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            <input style={{ maxWidth: 220 }} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome..." />
+            <select style={{ maxWidth: 240 }} value={filtroTurma} onChange={(e) => setFiltroTurma(e.target.value)}>
+              <option value="">Todas as turmas</option>
+              {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+            </select>
+          </div>
+        </>
       )}
 
       {alunas.length === 0 && !showForm ? (
@@ -611,8 +701,9 @@ function AlunasView({ alunas, setAlunas, turmas }) {
                   </div>
                   <div style={{ fontSize: 12.5, marginTop: 4, color: turma ? "#8B4A5C" : "#A89C97" }}>
                     {turma
-                      ? `${turma.nome}${a.diasFrequenta && a.diasFrequenta.length ? ` · ${a.diasFrequenta.join(" e ")}` : ""}`
+                      ? `[${turma.modalidade || "PVB"}] ${turma.nome}${a.diasFrequenta && a.diasFrequenta.length ? ` · ${a.diasFrequenta.join(" e ")}` : ""}`
                       : "Sem turma definida"}
+                    {` · Plano ${planoInfo(a.plano).label.toLowerCase()}`}
                     {a.desconto ? ` · ${a.desconto}% de desconto${a.descontoMotivo ? ` (${a.descontoMotivo})` : ""}` : ""}
                   </div>
                 </div>
@@ -934,10 +1025,14 @@ function diasNoMes(ano, mesIndex) {
   return new Date(ano, mesIndex + 1, 0).getDate();
 }
 
-function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }) {
+function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, setConfig }) {
   const [mesSelecionado, setMesSelecionado] = useState(mesAtualISO());
   const [showConfig, setShowConfig] = useState(false);
   const [configForm, setConfigForm] = useState(config);
+  const [planoConfigAtivo, setPlanoConfigAtivo] = useState("mensal");
+  const [filtroModalidade, setFiltroModalidade] = useState("");
+  const [editandoValorId, setEditandoValorId] = useState(null);
+  const [valorEditForm, setValorEditForm] = useState("");
 
   useEffect(() => {
     setConfigForm(config);
@@ -947,28 +1042,51 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
   const anoNum = Number(ano);
   const mesIndex = Number(mesStr) - 1;
 
-  // quantidades de dias distintas em uso, pra saber quais valores configurar
-  const qtdsEmUso = Array.from(new Set(
-    alunas.filter((a) => a.turmaId && (a.diasFrequenta || []).length > 0).map((a) => a.diasFrequenta.length)
+  // combinações plano+dias em uso, pra saber quais valores configurar
+  const combosEmUso = Array.from(new Set(
+    alunas.filter((a) => a.turmaId && (a.diasFrequenta || []).length > 0)
+      .map((a) => `${a.plano || "mensal"}|${a.diasFrequenta.length}`)
   )).sort();
 
-  const doMes = pagamentos.filter((p) => p.mes === mesSelecionado);
+  const doMes = pagamentos.filter((p) => {
+    if (p.mes !== mesSelecionado) return false;
+    if (filtroModalidade) {
+      const a = alunas.find((al) => al.id === p.alunaId);
+      const t = a && turmas.find((tu) => tu.id === a.turmaId);
+      if ((t?.modalidade || "PVB") !== filtroModalidade) return false;
+    }
+    return true;
+  });
 
   function salvarConfig() {
     setConfig(configForm);
     setShowConfig(false);
   }
 
+  // pra alunas de plano trimestral/semestral: verifica se já existe cobrança
+  // recente o bastante pra cobrir o mês selecionado, olhando o último pagamento gerado
+  function precisaGerarNesteMes(aluna) {
+    const plano = aluna.plano || "mensal";
+    const periodo = planoInfo(plano).meses;
+    const doAluna = pagamentos.filter((p) => p.alunaId === aluna.id).sort((x, y) => (x.mes < y.mes ? 1 : -1));
+    if (doAluna.length === 0) return true; // primeira cobrança
+    const ultimo = doAluna[0];
+    if (ultimo.mes === mesSelecionado) return false; // já gerado neste mês
+    return diffMeses(ultimo.mes, mesSelecionado) >= periodo;
+  }
+
   function gerarMensalidades() {
     const diaVenc = Math.min(config.diaVencimento || 10, diasNoMes(anoNum, mesIndex));
     const vencimento = `${ano}-${mesStr}-${String(diaVenc).padStart(2, "0")}`;
-    const jaGeradas = new Set(doMes.map((p) => p.alunaId));
+    const jaGeradasNesteMes = new Set(pagamentos.filter((p) => p.mes === mesSelecionado).map((p) => p.alunaId));
     const novas = [];
     alunas.forEach((a) => {
       if (!a.turmaId || !(a.diasFrequenta || []).length) return;
-      if (jaGeradas.has(a.id)) return;
+      if (jaGeradasNesteMes.has(a.id)) return;
+      if (!precisaGerarNesteMes(a)) return;
+      const plano = a.plano || "mensal";
       const qtd = a.diasFrequenta.length;
-      const valorBase = config.valoresPorDias?.[qtd];
+      const valorBase = config.valoresPorPlano?.[plano]?.[qtd];
       const desconto = Number(a.desconto) || 0;
       const valor = valorBase ? Math.round(valorBase * (1 - desconto / 100) * 100) / 100 : valorBase;
       novas.push({
@@ -980,6 +1098,8 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
         desconto,
         vencimento,
         status: "pendente",
+        plano,
+        periodoMeses: planoInfo(plano).meses,
       });
     });
     if (novas.length > 0) setPagamentos([...pagamentos, ...novas]);
@@ -989,7 +1109,22 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
     setPagamentos(pagamentos.map((p) => (p.id === id ? { ...p, status: p.status === "pago" ? "pendente" : "pago" } : p)));
   }
 
-  const alunasSemValorConfigurado = qtdsEmUso.filter((q) => !config.valoresPorDias?.[q]);
+  function abrirEdicaoValor(p) {
+    setEditandoValorId(p.id);
+    setValorEditForm(String(p.valor ?? ""));
+  }
+
+  function salvarValorEditado(id) {
+    const novoValor = Number(valorEditForm);
+    if (Number.isNaN(novoValor) || novoValor < 0) return;
+    setPagamentos(pagamentos.map((p) => (p.id === id ? { ...p, valor: novoValor, ajustadoManualmente: true } : p)));
+    setEditandoValorId(null);
+  }
+
+  const combosSemValorConfigurado = combosEmUso.filter((c) => {
+    const [plano, qtd] = c.split("|");
+    return !config.valoresPorPlano?.[plano]?.[qtd];
+  });
   const hoje = hojeISO();
 
   return (
@@ -1011,18 +1146,41 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
               onChange={(e) => setConfigForm({ ...configForm, diaVencimento: Number(e.target.value) })}
             />
           </div>
+
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {PLANOS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPlanoConfigAtivo(p.id)}
+                style={{
+                  border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+                  background: planoConfigAtivo === p.id ? "#2E2A2C" : "#F1EDE8",
+                  color: planoConfigAtivo === p.id ? "#fff" : "#6B615D",
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
           <div>
-            <label>Valor mensal por quantidade de dias frequentados</label>
+            <label>
+              Valor do plano {planoInfo(planoConfigAtivo).label.toLowerCase()} por quantidade de dias frequentados
+              {planoConfigAtivo !== "mensal" && " (valor total do período, não por mês)"}
+            </label>
             <div style={{ display: "grid", gap: 8 }}>
               {[1, 2, 3, 4].map((n) => (
                 <div key={n} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 13.5, width: 90 }}>{n} dia{n > 1 ? "s" : ""}/semana</span>
                   <input
                     type="number" min="0" step="0.01" style={{ maxWidth: 140 }}
-                    value={configForm.valoresPorDias?.[n] ?? ""}
+                    value={configForm.valoresPorPlano?.[planoConfigAtivo]?.[n] ?? ""}
                     onChange={(e) => setConfigForm({
                       ...configForm,
-                      valoresPorDias: { ...configForm.valoresPorDias, [n]: Number(e.target.value) },
+                      valoresPorPlano: {
+                        ...configForm.valoresPorPlano,
+                        [planoConfigAtivo]: { ...configForm.valoresPorPlano?.[planoConfigAtivo], [n]: Number(e.target.value) },
+                      },
                     })}
                     placeholder="R$"
                   />
@@ -1037,15 +1195,34 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
         </div>
       )}
 
-      {!showConfig && alunasSemValorConfigurado.length > 0 && (
+      {!showConfig && combosSemValorConfigurado.length > 0 && (
         <div style={{ background: "#FFF6E5", color: "#8A6416", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
-          Falta configurar o valor de {alunasSemValorConfigurado.join(", ")} dia(s)/semana — clique em "Configurar valores".
+          Falta configurar o valor de: {combosSemValorConfigurado.map((c) => {
+            const [plano, qtd] = c.split("|");
+            return `${planoInfo(plano).label} · ${qtd} dia(s)/semana`;
+          }).join(", ")} — clique em "Configurar valores".
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
         <input type="month" value={mesSelecionado} onChange={(e) => setMesSelecionado(e.target.value)} style={{ maxWidth: 170 }} />
         <button className="btn-primary" onClick={gerarMensalidades}>Gerar mensalidades do mês</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {["", ...MODALIDADES].map((m) => (
+          <button
+            key={m || "todas"}
+            onClick={() => setFiltroModalidade(m)}
+            style={{
+              border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+              background: filtroModalidade === m ? "#2E2A2C" : "#F1EDE8",
+              color: filtroModalidade === m ? "#fff" : "#6B615D",
+            }}
+          >
+            {m || "Todas"}
+          </button>
+        ))}
       </div>
 
       {doMes.length === 0 ? (
@@ -1055,26 +1232,57 @@ function PagamentosView({ alunas, pagamentos, setPagamentos, config, setConfig }
           {doMes.map((p) => {
             const a = alunas.find((al) => al.id === p.alunaId);
             const atrasado = p.status !== "pago" && p.vencimento < hoje;
+            const editando = editandoValorId === p.id;
+            const infoPlano = planoInfo(p.plano || "mensal");
             return (
-              <div key={p.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14.5 }}>{a ? a.nome : "Aluna removida"}</div>
-                  <div style={{ fontSize: 12.5, color: "#A89C97", marginTop: 2 }}>
-                    Vencimento {formatarData(p.vencimento)} · R$ {Number(p.valor).toFixed(2)}
-                    {p.desconto > 0 && ` (${p.desconto}% de desconto sobre R$ ${Number(p.valorBase).toFixed(2)})`}
-                    {!p.valor && " · valor não configurado"}
+              <div key={p.id} className="card" style={{ padding: "12px 16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14.5 }}>
+                      {a ? a.nome : "Aluna removida"}
+                      {infoPlano.id !== "mensal" && (
+                        <span style={{ fontWeight: 600, fontSize: 11, marginLeft: 8, background: "#F1EDE8", color: "#8B4A5C", borderRadius: 20, padding: "2px 9px" }}>
+                          {infoPlano.label}
+                        </span>
+                      )}
+                    </div>
+                    {!editando ? (
+                      <div style={{ fontSize: 12.5, color: "#A89C97", marginTop: 2 }}>
+                        Vencimento {formatarData(p.vencimento)} · R$ {Number(p.valor).toFixed(2)}
+                        {p.ajustadoManualmente
+                          ? " (valor ajustado manualmente)"
+                          : p.desconto > 0 && ` (${p.desconto}% de desconto sobre R$ ${Number(p.valorBase).toFixed(2)})`}
+                        {!p.valor && " · valor não configurado"}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                        <input
+                          type="number" min="0" step="0.01" style={{ maxWidth: 130 }}
+                          value={valorEditForm}
+                          onChange={(e) => setValorEditForm(e.target.value)}
+                          placeholder="Novo valor"
+                        />
+                        <button className="btn-text" style={{ color: "#8B4A5C" }} onClick={() => salvarValorEditado(p.id)}>Salvar</button>
+                        <button className="btn-text" style={{ color: "#A89C97" }} onClick={() => setEditandoValorId(null)}>Cancelar</button>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {!editando && (
+                      <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => abrirEdicaoValor(p)}>Editar valor</button>
+                    )}
+                    <button
+                      onClick={() => alternarStatus(p.id)}
+                      style={{
+                        border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+                        background: p.status === "pago" ? "#E8F0E5" : atrasado ? "#FBEAEA" : "#F1EDE8",
+                        color: p.status === "pago" ? "#4C7A44" : atrasado ? "#A3403F" : "#6B615D",
+                      }}
+                    >
+                      {p.status === "pago" ? "Pago" : atrasado ? "Atrasado" : "Pendente"}
+                    </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => alternarStatus(p.id)}
-                  style={{
-                    border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
-                    background: p.status === "pago" ? "#E8F0E5" : atrasado ? "#FBEAEA" : "#F1EDE8",
-                    color: p.status === "pago" ? "#4C7A44" : atrasado ? "#A3403F" : "#6B615D",
-                  }}
-                >
-                  {p.status === "pago" ? "Pago" : atrasado ? "Atrasado" : "Pendente"}
-                </button>
               </div>
             );
           })}
