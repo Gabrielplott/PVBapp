@@ -2,20 +2,12 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import { storage } from "./storage";
 import Login from "./Login";
+import { PLANOS, planoInfo } from "./planos";
+import { gerarEBaixarContrato } from "./contrato";
 
 const DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 const MODALIDADES = ["PVB", "Mapple", "Particular"];
-
-const PLANOS = [
-  { id: "mensal", label: "Mensal", meses: 1 },
-  { id: "trimestral", label: "Trimestral", meses: 3 },
-  { id: "semestral", label: "Semestral", meses: 6 },
-];
-
-function planoInfo(id) {
-  return PLANOS.find((p) => p.id === id) || PLANOS[0];
-}
 
 // diferença em meses entre duas strings "YYYY-MM" (b - a)
 function diffMeses(mesA, mesB) {
@@ -554,6 +546,19 @@ function AlunasView({ alunas, setAlunas, turmas }) {
     setAlunas(alunas.filter((a) => a.id !== id));
   }
 
+  async function handleGerarContrato(aluna, turma) {
+    if (!aluna.responsavel || !aluna.endereco) {
+      if (!window.confirm("Faltam dados da contratante (nome do responsável e/ou endereço). Gerar o contrato mesmo assim, com esses campos em branco?")) {
+        return;
+      }
+    }
+    try {
+      await gerarEBaixarContrato(aluna, turma);
+    } catch (err) {
+      window.alert("Não foi possível gerar o contrato: " + err.message);
+    }
+  }
+
   const visiveis = alunas.filter((a) => {
     if (filtroTurma && a.turmaId !== filtroTurma) return false;
     if (filtroModalidade) {
@@ -718,6 +723,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
+                  <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => handleGerarContrato(a, turma)}>Gerar contrato</button>
                   <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => openEdit(a)}>Editar</button>
                   <button className="btn-text" style={{ color: "#A3403F" }} onClick={() => remove(a.id)}>Remover</button>
                 </div>
