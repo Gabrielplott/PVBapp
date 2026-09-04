@@ -7,7 +7,7 @@ import { gerarEBaixarContrato } from "./contrato";
 
 const DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
-const MODALIDADES = ["PVB", "Mapple", "Particular"];
+const MODALIDADES = ["PVB", "Maple", "Particular"];
 
 // diferença em meses entre duas strings "YYYY-MM" (b - a)
 function diffMeses(mesA, mesB) {
@@ -20,14 +20,21 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-// converte config antiga (valoresPorDias, sem planos) para o novo formato (valoresPorPlano)
+// converte config antiga (sem separação por modalidade/escola) para o novo formato
+// (valoresPorModalidade: { PVB: { mensal: {1,2,3,4}, trimestral: {...}, semestral: {...} }, Maple: {...}, Particular: {...} })
 function migrarConfig(cfg) {
-  if (!cfg) return { diaVencimento: 10, valoresPorPlano: {} };
-  if (cfg.valoresPorPlano) return cfg;
-  if (cfg.valoresPorDias) {
-    return { diaVencimento: cfg.diaVencimento || 10, valoresPorPlano: { mensal: cfg.valoresPorDias } };
+  if (!cfg) return { diaVencimento: 10, valoresPorModalidade: {} };
+  if (cfg.valoresPorModalidade) return cfg;
+  // config antiga tinha um único conjunto de valores (valoresPorPlano), usado por todas as
+  // modalidades — migra esses valores pra dentro da PVB e deixa Maple/Particular em branco
+  // pra serem configurados.
+  if (cfg.valoresPorPlano) {
+    return { diaVencimento: cfg.diaVencimento || 10, valoresPorModalidade: { PVB: cfg.valoresPorPlano } };
   }
-  return { diaVencimento: cfg.diaVencimento || 10, valoresPorPlano: {} };
+  if (cfg.valoresPorDias) {
+    return { diaVencimento: cfg.diaVencimento || 10, valoresPorModalidade: { PVB: { mensal: cfg.valoresPorDias } } };
+  }
+  return { diaVencimento: cfg.diaVencimento || 10, valoresPorModalidade: {} };
 }
 
 function calcIdade(dataNasc) {
@@ -69,7 +76,7 @@ function EstudioApp({ onSair }) {
   const [contratos, setContratosState] = useState([]);
   const [despesas, setDespesasState] = useState([]);
   const [despesasFixas, setDespesasFixasState] = useState([]);
-  const [config, setConfigState] = useState({ diaVencimento: 10, valoresPorPlano: {} });
+  const [config, setConfigState] = useState({ diaVencimento: 10, valoresPorModalidade: {} });
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState("");
 
@@ -119,9 +126,9 @@ function EstudioApp({ onSair }) {
       }
       try {
         const cfg = await storage.get("config");
-        setConfigState(cfg ? migrarConfig(JSON.parse(cfg.value)) : { diaVencimento: 10, valoresPorPlano: {} });
+        setConfigState(cfg ? migrarConfig(JSON.parse(cfg.value)) : { diaVencimento: 10, valoresPorModalidade: {} });
       } catch {
-        setConfigState({ diaVencimento: 10, valoresPorPlano: {} });
+        setConfigState({ diaVencimento: 10, valoresPorModalidade: {} });
       }
       setLoading(false);
     })();
@@ -274,6 +281,7 @@ function EstudioApp({ onSair }) {
         ) : (
           <FinanceiroView
             alunas={alunas}
+            turmas={turmas}
             pagamentos={pagamentos}
             despesas={despesas}
             setDespesas={(v) => persist("despesas", v, setDespesasState)}
@@ -486,7 +494,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
   const [form, setForm] = useState(emptyAluna());
 
   function emptyAluna() {
-    return { nome: "", responsavel: "", contato: "", email: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
+    return { nome: "", responsavel: "", contato: "", email: "", cpfResponsavel: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
   }
 
   function openNew() {
@@ -501,6 +509,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
       responsavel: a.responsavel,
       contato: a.contato,
       email: a.email || "",
+      cpfResponsavel: a.cpfResponsavel || "",
       endereco: a.endereco || "",
       dataNascimento: a.dataNascimento,
       turmaId: a.turmaId,
@@ -594,6 +603,10 @@ function AlunasView({ alunas, setAlunas, turmas }) {
             <div>
               <label>E-mail do responsável</label>
               <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Para envio do contrato" />
+            </div>
+            <div>
+              <label>CPF do responsável</label>
+              <input value={form.cpfResponsavel} onChange={(e) => setForm({ ...form, cpfResponsavel: e.target.value })} placeholder="000.000.000-00" />
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <label>Endereço do responsável</label>
@@ -1045,6 +1058,7 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
   const [mesSelecionado, setMesSelecionado] = useState(mesAtualISO());
   const [showConfig, setShowConfig] = useState(false);
   const [configForm, setConfigForm] = useState(config);
+  const [modalidadeConfigAtiva, setModalidadeConfigAtiva] = useState(MODALIDADES[0]);
   const [planoConfigAtivo, setPlanoConfigAtivo] = useState("mensal");
   const [filtroModalidade, setFiltroModalidade] = useState("");
   const [editandoValorId, setEditandoValorId] = useState(null);
@@ -1058,10 +1072,14 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
   const anoNum = Number(ano);
   const mesIndex = Number(mesStr) - 1;
 
-  // combinações plano+dias em uso, pra saber quais valores configurar
+  // combinações modalidade+plano+dias em uso, pra saber quais valores configurar
   const combosEmUso = Array.from(new Set(
     alunas.filter((a) => a.turmaId && (a.diasFrequenta || []).length > 0)
-      .map((a) => `${a.plano || "mensal"}|${a.diasFrequenta.length}`)
+      .map((a) => {
+        const turma = turmas.find((t) => t.id === a.turmaId);
+        const modalidade = turma?.modalidade || "PVB";
+        return `${modalidade}|${a.plano || "mensal"}|${a.diasFrequenta.length}`;
+      })
   )).sort();
 
   const doMes = pagamentos.filter((p) => {
@@ -1102,7 +1120,9 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
       if (!precisaGerarNesteMes(a)) return;
       const plano = a.plano || "mensal";
       const qtd = a.diasFrequenta.length;
-      const valorBase = config.valoresPorPlano?.[plano]?.[qtd];
+      const turma = turmas.find((t) => t.id === a.turmaId);
+      const modalidade = turma?.modalidade || "PVB";
+      const valorBase = config.valoresPorModalidade?.[modalidade]?.[plano]?.[qtd];
       const desconto = Number(a.desconto) || 0;
       const valor = valorBase ? Math.round(valorBase * (1 - desconto / 100) * 100) / 100 : valorBase;
       novas.push({
@@ -1115,6 +1135,7 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
         vencimento,
         status: "pendente",
         plano,
+        modalidade,
         periodoMeses: planoInfo(plano).meses,
       });
     });
@@ -1138,8 +1159,8 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
   }
 
   const combosSemValorConfigurado = combosEmUso.filter((c) => {
-    const [plano, qtd] = c.split("|");
-    return !config.valoresPorPlano?.[plano]?.[qtd];
+    const [modalidade, plano, qtd] = c.split("|");
+    return !config.valoresPorModalidade?.[modalidade]?.[plano]?.[qtd];
   });
   const hoje = hojeISO();
 
@@ -1163,6 +1184,23 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
             />
           </div>
 
+          <div style={{ marginBottom: 4, fontSize: 13, color: "#6B615D", fontWeight: 600 }}>Escola / modalidade</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            {MODALIDADES.map((m) => (
+              <button
+                key={m}
+                onClick={() => setModalidadeConfigAtiva(m)}
+                style={{
+                  border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+                  background: modalidadeConfigAtiva === m ? "#8B4A5C" : "#F1EDE8",
+                  color: modalidadeConfigAtiva === m ? "#fff" : "#6B615D",
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
           <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
             {PLANOS.map((p) => (
               <button
@@ -1181,7 +1219,7 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
 
           <div>
             <label>
-              Valor do plano {planoInfo(planoConfigAtivo).label.toLowerCase()} por quantidade de dias frequentados
+              {modalidadeConfigAtiva} · valor do plano {planoInfo(planoConfigAtivo).label.toLowerCase()} por quantidade de dias frequentados
               {planoConfigAtivo !== "mensal" && " (valor total do período, não por mês)"}
             </label>
             <div style={{ display: "grid", gap: 8 }}>
@@ -1190,12 +1228,18 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
                   <span style={{ fontSize: 13.5, width: 90 }}>{n} dia{n > 1 ? "s" : ""}/semana</span>
                   <input
                     type="number" min="0" step="0.01" style={{ maxWidth: 140 }}
-                    value={configForm.valoresPorPlano?.[planoConfigAtivo]?.[n] ?? ""}
+                    value={configForm.valoresPorModalidade?.[modalidadeConfigAtiva]?.[planoConfigAtivo]?.[n] ?? ""}
                     onChange={(e) => setConfigForm({
                       ...configForm,
-                      valoresPorPlano: {
-                        ...configForm.valoresPorPlano,
-                        [planoConfigAtivo]: { ...configForm.valoresPorPlano?.[planoConfigAtivo], [n]: Number(e.target.value) },
+                      valoresPorModalidade: {
+                        ...configForm.valoresPorModalidade,
+                        [modalidadeConfigAtiva]: {
+                          ...configForm.valoresPorModalidade?.[modalidadeConfigAtiva],
+                          [planoConfigAtivo]: {
+                            ...configForm.valoresPorModalidade?.[modalidadeConfigAtiva]?.[planoConfigAtivo],
+                            [n]: Number(e.target.value),
+                          },
+                        },
                       },
                     })}
                     placeholder="R$"
@@ -1214,8 +1258,8 @@ function PagamentosView({ alunas, turmas, pagamentos, setPagamentos, config, set
       {!showConfig && combosSemValorConfigurado.length > 0 && (
         <div style={{ background: "#FFF6E5", color: "#8A6416", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
           Falta configurar o valor de: {combosSemValorConfigurado.map((c) => {
-            const [plano, qtd] = c.split("|");
-            return `${planoInfo(plano).label} · ${qtd} dia(s)/semana`;
+            const [modalidade, plano, qtd] = c.split("|");
+            return `${modalidade} · ${planoInfo(plano).label} · ${qtd} dia(s)/semana`;
           }).join(", ")} — clique em "Configurar valores".
         </div>
       )}
@@ -1488,16 +1532,25 @@ function ContratosView({ alunas, contratos, setContratos }) {
   );
 }
 
-function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFixas, setDespesasFixas }) {
+function FinanceiroView({ alunas, turmas, pagamentos, despesas, setDespesas, despesasFixas, setDespesasFixas }) {
   const [mesSelecionado, setMesSelecionado] = useState(mesAtualISO());
   const [showFixas, setShowFixas] = useState(false);
-  const [novaFixa, setNovaFixa] = useState({ descricao: "", valor: "", diaDoMes: 5 });
-  const [novaDespesa, setNovaDespesa] = useState({ descricao: "", valor: "", data: hojeISO() });
+  const [novaFixa, setNovaFixa] = useState({ descricao: "", valor: "", diaDoMes: 5, modalidade: "" });
+  const [novaDespesa, setNovaDespesa] = useState({ descricao: "", valor: "", data: hojeISO(), modalidade: "" });
   const [showAddDespesa, setShowAddDespesa] = useState(false);
 
   const [ano, mesStr] = mesSelecionado.split("-");
   const anoNum = Number(ano);
   const mesIndex = Number(mesStr) - 1;
+
+  // pagamentos antigos (gerados antes desta atualização) não têm p.modalidade salvo —
+  // nesse caso, deduz pela turma atual da aluna. Pagamentos novos já trazem a modalidade gravada.
+  function modalidadeDoPagamento(p) {
+    if (p.modalidade) return p.modalidade;
+    const a = alunas.find((al) => al.id === p.alunaId);
+    const t = a && turmas.find((tu) => tu.id === a.turmaId);
+    return t?.modalidade || "PVB";
+  }
 
   const receitasDoMes = pagamentos.filter((p) => p.mes === mesSelecionado && p.status === "pago");
   const totalReceitas = receitasDoMes.reduce((s, p) => s + Number(p.valor || 0), 0);
@@ -1507,10 +1560,25 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
 
   const saldo = totalReceitas - totalDespesas;
 
+  // quebra por escola/modalidade — despesas sem modalidade definida entram como "Geral" (custo compartilhado)
+  const GERAL = "Geral";
+  const porModalidade = {};
+  [...MODALIDADES, GERAL].forEach((m) => { porModalidade[m] = { receitas: 0, despesas: 0 }; });
+  receitasDoMes.forEach((p) => {
+    const m = modalidadeDoPagamento(p);
+    if (!porModalidade[m]) porModalidade[m] = { receitas: 0, despesas: 0 };
+    porModalidade[m].receitas += Number(p.valor || 0);
+  });
+  despesasDoMes.forEach((d) => {
+    const m = d.modalidade || GERAL;
+    if (!porModalidade[m]) porModalidade[m] = { receitas: 0, despesas: 0 };
+    porModalidade[m].despesas += Number(d.valor || 0);
+  });
+
   function addFixa() {
     if (!novaFixa.descricao.trim() || !novaFixa.valor) return;
-    setDespesasFixas([...despesasFixas, { id: uid(), descricao: novaFixa.descricao, valor: Number(novaFixa.valor), diaDoMes: Number(novaFixa.diaDoMes) }]);
-    setNovaFixa({ descricao: "", valor: "", diaDoMes: 5 });
+    setDespesasFixas([...despesasFixas, { id: uid(), descricao: novaFixa.descricao, valor: Number(novaFixa.valor), diaDoMes: Number(novaFixa.diaDoMes), modalidade: novaFixa.modalidade }]);
+    setNovaFixa({ descricao: "", valor: "", diaDoMes: 5, modalidade: "" });
   }
 
   function removerFixa(id) {
@@ -1529,6 +1597,7 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
         valor: f.valor,
         data: `${ano}-${mesStr}-${String(dia).padStart(2, "0")}`,
         origemFixaId: f.id,
+        modalidade: f.modalidade || "",
       });
     });
     if (novas.length > 0) setDespesas([...despesas, ...novas]);
@@ -1536,8 +1605,8 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
 
   function addDespesaManual() {
     if (!novaDespesa.descricao.trim() || !novaDespesa.valor || !novaDespesa.data) return;
-    setDespesas([...despesas, { id: uid(), descricao: novaDespesa.descricao, valor: Number(novaDespesa.valor), data: novaDespesa.data }]);
-    setNovaDespesa({ descricao: "", valor: "", data: hojeISO() });
+    setDespesas([...despesas, { id: uid(), descricao: novaDespesa.descricao, valor: Number(novaDespesa.valor), data: novaDespesa.data, modalidade: novaDespesa.modalidade }]);
+    setNovaDespesa({ descricao: "", valor: "", data: hojeISO(), modalidade: "" });
     setShowAddDespesa(false);
   }
 
@@ -1552,7 +1621,7 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
         <input type="month" value={mesSelecionado} onChange={(e) => setMesSelecionado(e.target.value)} style={{ maxWidth: 170 }} />
       </div>
 
-      {/* Resumo / saldo */}
+      {/* Resumo / saldo geral */}
       <div className="card" style={{ marginBottom: 20, display: "flex", gap: 24, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 12, color: "#A89C97" }}>Receitas ({NOMES_MES[mesIndex]})</div>
@@ -1570,6 +1639,31 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
         </div>
       </div>
 
+      {/* Resumo por escola/modalidade */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 8 }}>Por escola ({NOMES_MES[mesIndex]})</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {[...MODALIDADES, GERAL].map((m) => {
+            const dados = porModalidade[m] || { receitas: 0, despesas: 0 };
+            const saldoM = dados.receitas - dados.despesas;
+            if (dados.receitas === 0 && dados.despesas === 0) return null;
+            return (
+              <div key={m} className="card" style={{ minWidth: 180, flex: "1 1 180px" }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8, color: m === GERAL ? "#6B615D" : "#8B4A5C" }}>
+                  {m === GERAL ? "Geral / compartilhado" : m}
+                </div>
+                <div style={{ fontSize: 12.5, color: "#A89C97" }}>Receitas</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#4C7A44", marginBottom: 6 }}>R$ {dados.receitas.toFixed(2)}</div>
+                <div style={{ fontSize: 12.5, color: "#A89C97" }}>Despesas</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#A3403F", marginBottom: 6 }}>R$ {dados.despesas.toFixed(2)}</div>
+                <div style={{ fontSize: 12.5, color: "#A89C97" }}>Saldo</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: saldoM >= 0 ? "#4C7A44" : "#A3403F" }}>R$ {saldoM.toFixed(2)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Receitas */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 8 }}>Receitas (mensalidades pagas)</div>
@@ -1581,7 +1675,7 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
               const a = alunas.find((al) => al.id === p.alunaId);
               return (
                 <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "6px 2px", borderBottom: "1px solid #F1EDE8" }}>
-                  <span>{a ? a.nome : "Aluna removida"}</span>
+                  <span>{a ? a.nome : "Aluna removida"} <span style={{ color: "#A89C97", fontSize: 12 }}>· {modalidadeDoPagamento(p)}</span></span>
                   <span style={{ color: "#4C7A44", fontWeight: 600 }}>R$ {Number(p.valor).toFixed(2)}</span>
                 </div>
               );
@@ -1603,7 +1697,7 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
             <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
               {despesasFixas.map((f) => (
                 <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5 }}>
-                  <span>{f.descricao} · R$ {Number(f.valor).toFixed(2)} · todo dia {f.diaDoMes}</span>
+                  <span>{f.descricao} · R$ {Number(f.valor).toFixed(2)} · todo dia {f.diaDoMes} <span style={{ color: "#A89C97", fontSize: 12 }}>· {f.modalidade || "Geral"}</span></span>
                   <button className="btn-text" style={{ color: "#A3403F" }} onClick={() => removerFixa(f.id)}>Remover</button>
                 </div>
               ))}
@@ -1613,6 +1707,13 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
             <input placeholder="Descrição (ex.: Aluguel)" value={novaFixa.descricao} onChange={(e) => setNovaFixa({ ...novaFixa, descricao: e.target.value })} />
             <input type="number" step="0.01" placeholder="Valor" value={novaFixa.valor} onChange={(e) => setNovaFixa({ ...novaFixa, valor: e.target.value })} />
             <input type="number" min="1" max="28" placeholder="Dia" value={novaFixa.diaDoMes} onChange={(e) => setNovaFixa({ ...novaFixa, diaDoMes: e.target.value })} />
+          </div>
+          <div style={{ marginTop: 8, maxWidth: 220 }}>
+            <label style={{ fontSize: 12.5 }}>Escola (opcional — deixe em branco se for custo compartilhado)</label>
+            <select value={novaFixa.modalidade} onChange={(e) => setNovaFixa({ ...novaFixa, modalidade: e.target.value })}>
+              <option value="">Geral / compartilhado</option>
+              {MODALIDADES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
           </div>
           <button className="btn-primary" style={{ marginTop: 10 }} onClick={addFixa}>+ Adicionar despesa fixa</button>
         </div>
@@ -1636,6 +1737,13 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
             <input type="number" step="0.01" placeholder="Valor" value={novaDespesa.valor} onChange={(e) => setNovaDespesa({ ...novaDespesa, valor: e.target.value })} />
             <input type="date" value={novaDespesa.data} onChange={(e) => setNovaDespesa({ ...novaDespesa, data: e.target.value })} />
           </div>
+          <div style={{ marginTop: 8, maxWidth: 220 }}>
+            <label style={{ fontSize: 12.5 }}>Escola (opcional — deixe em branco se for custo compartilhado)</label>
+            <select value={novaDespesa.modalidade} onChange={(e) => setNovaDespesa({ ...novaDespesa, modalidade: e.target.value })}>
+              <option value="">Geral / compartilhado</option>
+              {MODALIDADES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button className="btn-primary" onClick={addDespesaManual}>Adicionar</button>
             <button className="btn-ghost" onClick={() => setShowAddDespesa(false)}>Cancelar</button>
@@ -1651,7 +1759,7 @@ function FinanceiroView({ alunas, pagamentos, despesas, setDespesas, despesasFix
             <div key={d.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px" }}>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{d.descricao}</div>
-                <div style={{ fontSize: 12, color: "#A89C97" }}>{formatarData(d.data)}{d.origemFixaId ? " · fixa" : ""}</div>
+                <div style={{ fontSize: 12, color: "#A89C97" }}>{formatarData(d.data)}{d.origemFixaId ? " · fixa" : ""} · {d.modalidade || "Geral"}</div>
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <span style={{ fontWeight: 600, color: "#A3403F" }}>R$ {Number(d.valor).toFixed(2)}</span>
