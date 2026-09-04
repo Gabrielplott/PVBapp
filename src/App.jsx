@@ -494,7 +494,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
   const [form, setForm] = useState(emptyAluna());
 
   function emptyAluna() {
-    return { nome: "", responsavel: "", contato: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
+    return { nome: "", responsavel: "", contato: "", email: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
   }
 
   function openNew() {
@@ -508,6 +508,8 @@ function AlunasView({ alunas, setAlunas, turmas }) {
       nome: a.nome,
       responsavel: a.responsavel,
       contato: a.contato,
+      email: a.email || "",
+      endereco: a.endereco || "",
       dataNascimento: a.dataNascimento,
       turmaId: a.turmaId,
       diasFrequenta: a.diasFrequenta || [],
@@ -583,6 +585,14 @@ function AlunasView({ alunas, setAlunas, turmas }) {
             <div>
               <label>Contato</label>
               <input value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone / WhatsApp" />
+            </div>
+            <div>
+              <label>E-mail do responsável</label>
+              <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Para envio do contrato" />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Endereço do responsável</label>
+              <input value={form.endereco} onChange={(e) => setForm({ ...form, endereco: e.target.value })} placeholder="Endereço completo (para o contrato)" />
             </div>
             <div>
               <label>Data de nascimento</label>
