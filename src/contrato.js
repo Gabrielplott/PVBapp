@@ -1,3 +1,4 @@
+import { supabase } from "./supabaseClient";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { planoInfo } from "./planos";
@@ -86,4 +87,47 @@ export async function gerarEBaixarContrato(aluna, turma) {
   const blob = await gerarContratoBlob(aluna, turma);
   const nomeArquivo = `Contrato - ${aluna.nome || "aluna"}.docx`;
   baixarBlob(blob, nomeArquivo);
+}
+
+// ---------- Integração com a Autentique (via Edge Function "autentique") ----------
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = () => reject(new Error("Falha ao ler o contrato gerado."));
+    r.readAsDataURL(blob);
+  });
+}
+
+async function chamarAutentique(payload) {
+  const { data, error } = await supabase.functions.invoke("autentique", { body: payload });
+  if (error) {
+    let msg = error.message;
+    try {
+      const corpo = await error.context?.json();
+      if (corpo?.erro) msg = corpo.erro;
+    } catch { /* mantém a mensagem original */ }
+    throw new Error(msg);
+  }
+  if (data?.erro) throw new Error(data.erro);
+  return data;
+}
+
+// Gera o contrato preenchido e envia para assinatura do responsável na Autentique.
+export async function enviarContratoAutentique(aluna, turma) {
+  const blob = await gerarContratoBlob(aluna, turma);
+  const arquivoBase64 = await blobToBase64(blob);
+  return chamarAutentique({
+    acao: "enviar",
+    nomeDocumento: `Contrato - ${aluna.nome}`,
+    nomeArquivo: `Contrato - ${aluna.nome}.docx`,
+    arquivoBase64,
+    signatario: { nome: aluna.responsavel || "", email: aluna.email },
+  });
+}
+
+// { status: "pendente" | "assinado" | "recusado", assinadoEm?, pdfBase64? }
+export async function consultarContratoAutentique(documentoId) {
+  return chamarAutentique({ acao: "status", documentoId });
 }

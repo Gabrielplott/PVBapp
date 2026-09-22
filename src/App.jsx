@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient";
 import { storage } from "./storage";
 import Login from "./Login";
 import { PLANOS, planoInfo } from "./planos";
-import { gerarEBaixarContrato } from "./contrato";
+import { gerarEBaixarContrato, enviarContratoAutentique, consultarContratoAutentique } from "./contrato";
 
 const DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
@@ -275,6 +275,7 @@ function EstudioApp({ onSair }) {
         ) : tab === "contratos" ? (
           <ContratosView
             alunas={alunas}
+            turmas={turmas}
             contratos={contratos}
             setContratos={(v) => persist("contratos", v, setContratosState)}
           />
@@ -1371,7 +1372,7 @@ function fileToDataUrl(file) {
   });
 }
 
-function ContratosView({ alunas, contratos, setContratos }) {
+function ContratosView({ alunas, turmas, contratos, setContratos }) {
   const [editId, setEditId] = useState(null); // alunaId sendo editado
   const [busca, setBusca] = useState("");
   const [statusForm, setStatusForm] = useState("pendente");
@@ -1379,6 +1380,93 @@ function ContratosView({ alunas, contratos, setContratos }) {
   const [arquivoInfo, setArquivoInfo] = useState(null); // {nome, tipo}
   const [uploading, setUploading] = useState(false);
   const [fileError, setFileError] = useState("");
+  const [enviandoId, setEnviandoId] = useState(null);
+  const [verificando, setVerificando] = useState(false);
+  const [avisoAutentique, setAvisoAutentique] = useState("");
+
+  // Envia o contrato preenchido para assinatura na Autentique
+  async function enviarParaAssinatura(aluna) {
+    if (!aluna.email) {
+      window.alert("Cadastre o e-mail do responsável (em Alunas > Editar) antes de enviar para assinatura.");
+      return;
+    }
+    if (!aluna.responsavel || !aluna.endereco) {
+      if (!window.confirm("Faltam dados da contratante (nome e/ou endereço). Enviar mesmo assim, com esses campos em branco?")) return;
+    }
+    if (!window.confirm(`Enviar o contrato de ${aluna.nome} para assinatura de ${aluna.email}?`)) return;
+    setEnviandoId(aluna.id);
+    try {
+      const turma = turmas.find((t) => t.id === aluna.turmaId);
+      const r = await enviarContratoAutentique(aluna, turma);
+      const existente = contratoDe(aluna.id);
+      const registro = {
+        ...(existente || {}),
+        id: existente?.id || uid(),
+        alunaId: aluna.id,
+        status: "pendente",
+        dataAssinatura: "",
+        autentiqueId: r.documentoId,
+        autentiqueLink: r.linkAssinatura || "",
+        autentiqueEnviadoEm: hojeISO(),
+        autentiqueEmail: aluna.email,
+        autentiqueRecusado: false,
+        autentiqueSandbox: !!r.sandbox,
+      };
+      setContratos([...contratos.filter((c) => c.alunaId !== aluna.id), registro]);
+      setAvisoAutentique(`Contrato de ${aluna.nome} enviado para ${aluna.email}.`);
+    } catch (err) {
+      window.alert("Não foi possível enviar para a Autentique: " + err.message);
+    }
+    setEnviandoId(null);
+  }
+
+  // Consulta na Autentique os contratos pendentes; os assinados viram "Ativo" com o PDF anexado
+  async function verificarAssinaturas(silencioso = false) {
+    const pendentes = contratos.filter((c) => c.autentiqueId && c.status === "pendente" && !c.autentiqueRecusado);
+    if (pendentes.length === 0) {
+      if (!silencioso) setAvisoAutentique("Nenhum contrato aguardando assinatura.");
+      return;
+    }
+    setVerificando(true);
+    const atualizados = {};
+    let assinados = 0;
+    let erros = 0;
+    for (const c of pendentes) {
+      try {
+        const r = await consultarContratoAutentique(c.autentiqueId);
+        if (r.status === "assinado") {
+          const aluna = alunas.find((a) => a.id === c.alunaId);
+          let arquivo = {};
+          if (r.pdfBase64) {
+            await storage.set(`contrato_arquivo_${c.alunaId}`, `data:application/pdf;base64,${r.pdfBase64}`);
+            arquivo = { arquivoNome: `Contrato assinado - ${aluna?.nome || "aluna"}.pdf`, arquivoTipo: "application/pdf" };
+          }
+          atualizados[c.alunaId] = { ...c, ...arquivo, status: "ativo", dataAssinatura: r.assinadoEm || hojeISO() };
+          assinados++;
+        } else if (r.status === "recusado") {
+          atualizados[c.alunaId] = { ...c, autentiqueRecusado: true };
+        }
+      } catch {
+        erros++;
+      }
+    }
+    if (Object.keys(atualizados).length) {
+      setContratos(contratos.map((c) => atualizados[c.alunaId] || c));
+    }
+    setVerificando(false);
+    if (!silencioso || assinados || erros) {
+      setAvisoAutentique(
+        `${assinados} contrato(s) assinado(s) atualizado(s)` +
+        (erros ? ` · ${erros} não puderam ser consultados` : "") + "."
+      );
+    }
+  }
+
+  // Ao abrir a aba, verifica automaticamente os contratos enviados
+  useEffect(() => {
+    verificarAssinaturas(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function contratoDe(alunaId) {
     return contratos.find((c) => c.alunaId === alunaId);
@@ -1437,6 +1525,7 @@ function ContratosView({ alunas, contratos, setContratos }) {
   function salvar(alunaId) {
     const existente = contratoDe(alunaId);
     const registro = {
+      ...(existente || {}),
       id: existente?.id || uid(),
       alunaId,
       status: statusForm,
@@ -1459,7 +1548,17 @@ function ContratosView({ alunas, contratos, setContratos }) {
         <EmptyState text="Cadastre alunas primeiro para gerenciar os contratos delas." />
       ) : (
         <>
-          <input style={{ maxWidth: 260, marginBottom: 14 }} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome..." />
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+            <input style={{ maxWidth: 260 }} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome..." />
+            <button className="btn-ghost" onClick={() => verificarAssinaturas(false)} disabled={verificando}>
+              {verificando ? "Verificando..." : "Verificar assinaturas"}
+            </button>
+          </div>
+          {avisoAutentique && (
+            <div style={{ fontSize: 13, color: "#4C7A44", background: "#E8F0E5", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
+              {avisoAutentique}
+            </div>
+          )}
 
           <div style={{ display: "grid", gap: 10 }}>
             {visiveis.map((a) => {
@@ -1475,11 +1574,27 @@ function ContratosView({ alunas, contratos, setContratos }) {
                         {c?.dataAssinatura ? `Assinado em ${formatarData(c.dataAssinatura)}` : "Sem data registrada"}
                         {c?.arquivoNome ? " · arquivo anexado" : ""}
                       </div>
+                      {c?.autentiqueId && c.status === "pendente" && (
+                        <div style={{ fontSize: 12.5, marginTop: 3, color: c.autentiqueRecusado ? "#A3403F" : "#8A6416" }}>
+                          {c.autentiqueRecusado
+                            ? "Assinatura recusada na Autentique"
+                            : `Enviado à Autentique em ${formatarData(c.autentiqueEnviadoEm)} · aguardando assinatura`}
+                          {c.autentiqueSandbox ? " (teste)" : ""}
+                          {c.autentiqueLink && !c.autentiqueRecusado && (
+                            <> · <a href={c.autentiqueLink} target="_blank" rel="noreferrer" style={{ color: "#8B4A5C" }}>link de assinatura</a></>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <span style={{ fontSize: 12.5, fontWeight: 600, background: info.bg, color: info.fg, borderRadius: 20, padding: "5px 12px" }}>
                         {info.label}
                       </span>
+                      {!editando && (!c || c.status !== "ativo") && (!c?.autentiqueId || c.autentiqueRecusado || c.status !== "pendente") && (
+                        <button className="btn-text" style={{ color: "#8B4A5C" }} onClick={() => enviarParaAssinatura(a)} disabled={enviandoId === a.id}>
+                          {enviandoId === a.id ? "Enviando..." : c?.autentiqueRecusado ? "Reenviar p/ assinatura" : "Enviar p/ assinatura"}
+                        </button>
+                      )}
                       {!editando && (
                         <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => abrirEdicao(a)}>Editar</button>
                       )}
