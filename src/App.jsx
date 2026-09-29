@@ -9,6 +9,70 @@ const DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 const MODALIDADES = ["PVB", "Maple", "Particular"];
 
+// ---------- máscaras de digitação ----------
+function soDigitos(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+
+// (79) 98802-4021 ou (79) 3211-4021 — digita só os números
+function mascaraTelefone(v) {
+  let d = soDigitos(v);
+  if (d.length > 11 && d.startsWith("55")) d = d.slice(2); // tira o +55 se colarem com DDI
+  d = d.slice(0, 11);
+  if (d.length <= 2) return d.length ? `(${d}` : "";
+  const ddd = d.slice(0, 2);
+  const resto = d.slice(2);
+  if (resto.length <= 4) return `(${ddd}) ${resto}`;
+  if (d.length === 11) return `(${ddd}) ${resto.slice(0, 5)}-${resto.slice(5)}`;
+  return `(${ddd}) ${resto.slice(0, 4)}-${resto.slice(4)}`;
+}
+
+// 000.000.000-00
+function mascaraCPF(v) {
+  const d = soDigitos(v).slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+// link de WhatsApp a partir do telefone salvo
+function linkWhatsApp(tel) {
+  let d = soDigitos(tel);
+  if (!d) return null;
+  if (!d.startsWith("55")) d = "55" + d;
+  return `https://wa.me/${d}`;
+}
+
+// "2026-10-05" -> "Segunda" (ou null se for domingo)
+const NOMES_DIA_SEMANA = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+function diaDaSemana(iso) {
+  if (!iso) return null;
+  const [a, m, d] = iso.split("-").map(Number);
+  return NOMES_DIA_SEMANA[new Date(a, m - 1, d).getDay()];
+}
+
+function isoLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// próximas N datas em que a turma tem aula (a partir de hoje)
+function proximasDatasDaTurma(turma, n = 6) {
+  if (!turma) return [];
+  const dias = (turma.horarios || []).map((h) => h.dia);
+  const res = [];
+  const cur = new Date();
+  for (let i = 0; i < 60 && res.length < n; i++) {
+    const iso = isoLocal(cur);
+    if (dias.includes(diaDaSemana(iso))) res.push(iso);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return res;
+}
+
 // diferença em meses entre duas strings "YYYY-MM" (b - a)
 function diffMeses(mesA, mesB) {
   const [anoA, mA] = mesA.split("-").map(Number);
@@ -74,6 +138,8 @@ function EstudioApp({ onSair }) {
   const [presencas, setPresencas] = useState([]);
   const [pagamentos, setPagamentosState] = useState([]);
   const [contratos, setContratosState] = useState([]);
+  const [experimentais, setExperimentaisState] = useState([]);
+  const [alunaPrefill, setAlunaPrefill] = useState(null); // dados vindos de uma aula experimental
   const [despesas, setDespesasState] = useState([]);
   const [despesasFixas, setDespesasFixasState] = useState([]);
   const [config, setConfigState] = useState({ diaVencimento: 10, valoresPorModalidade: {} });
@@ -111,6 +177,12 @@ function EstudioApp({ onSair }) {
         setContratosState(c ? JSON.parse(c.value) : []);
       } catch {
         setContratosState([]);
+      }
+      try {
+        const ex = await storage.get("experimentais");
+        setExperimentaisState(ex ? JSON.parse(ex.value) : []);
+      } catch {
+        setExperimentaisState([]);
       }
       try {
         const d = await storage.get("despesas");
@@ -216,11 +288,12 @@ function EstudioApp({ onSair }) {
           <div style={{ flex: 1, height: 1, background: "#E8DFD8" }} />
         </div>
 
-        <nav style={{ display: "flex", gap: 6 }}>
+        <nav style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[
             { id: "turmas", label: `Turmas (${turmas.length})` },
             { id: "alunas", label: `Alunas (${alunas.length})` },
             { id: "presencas", label: "Presenças" },
+            { id: "experimentais", label: "Experimentais" },
             { id: "pagamentos", label: "Pagamentos" },
             { id: "contratos", label: "Contratos" },
             { id: "financeiro", label: "Financeiro" },
@@ -255,13 +328,48 @@ function EstudioApp({ onSair }) {
         ) : tab === "turmas" ? (
           <TurmasView turmas={turmas} setTurmas={(v) => persist("turmas", v, setTurmas)} alunas={alunas} />
         ) : tab === "alunas" ? (
-          <AlunasView alunas={alunas} setAlunas={(v) => persist("alunas", v, setAlunas)} turmas={turmas} />
+          <AlunasView
+            alunas={alunas}
+            setAlunas={(v) => persist("alunas", v, setAlunas)}
+            turmas={turmas}
+            prefill={alunaPrefill}
+            onPrefillConcluido={(novaAlunaId) => {
+              if (novaAlunaId && alunaPrefill?.experimentalId) {
+                persist(
+                  "experimentais",
+                  experimentais.map((e) => (e.id === alunaPrefill.experimentalId ? { ...e, alunaId: novaAlunaId, matriculadaEm: hojeISO() } : e)),
+                  setExperimentaisState
+                );
+              }
+              setAlunaPrefill(null);
+            }}
+          />
         ) : tab === "presencas" ? (
           <PresencasView
             turmas={turmas}
             alunas={alunas}
             presencas={presencas}
             setPresencas={(v) => persist("presencas", v, setPresencas)}
+            experimentais={experimentais}
+          />
+        ) : tab === "experimentais" ? (
+          <ExperimentaisView
+            turmas={turmas}
+            alunas={alunas}
+            presencas={presencas}
+            experimentais={experimentais}
+            setExperimentais={(v) => persist("experimentais", v, setExperimentaisState)}
+            onCadastrarAluna={(exp) => {
+              setAlunaPrefill({
+                experimentalId: exp.id,
+                nome: exp.nomeAluna,
+                responsavel: exp.responsavel,
+                contato: exp.contato,
+                turmaId: exp.turmaId,
+                diasFrequenta: exp.dia ? [exp.dia] : [],
+              });
+              setTab("alunas");
+            }}
           />
         ) : tab === "pagamentos" ? (
           <PagamentosView
@@ -486,13 +594,34 @@ function turmaSelecionadaHorarios(turmas, turmaId) {
   return t ? (t.horarios || []) : [];
 }
 
-function AlunasView({ alunas, setAlunas, turmas }) {
+function AlunasView({ alunas, setAlunas, turmas, prefill, onPrefillConcluido }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [filtroTurma, setFiltroTurma] = useState("");
   const [filtroModalidade, setFiltroModalidade] = useState("");
   const [busca, setBusca] = useState("");
   const [form, setForm] = useState(emptyAluna());
+  const [vindoDeExperimental, setVindoDeExperimental] = useState(false);
+
+  // abre o formulário já preenchido quando vem da aba Experimentais
+  useEffect(() => {
+    if (!prefill) return;
+    const { experimentalId, ...dados } = prefill;
+    setForm({ ...emptyAluna(), ...dados });
+    setEditId(null);
+    setVindoDeExperimental(true);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
+
+  function fecharForm() {
+    setShowForm(false);
+    if (vindoDeExperimental) {
+      setVindoDeExperimental(false);
+      onPrefillConcluido?.(null);
+    }
+  }
 
   function emptyAluna() {
     return { nome: "", responsavel: "", contato: "", email: "", cpfResponsavel: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
@@ -546,7 +675,12 @@ function AlunasView({ alunas, setAlunas, turmas }) {
     if (editId) {
       setAlunas(alunas.map((a) => (a.id === editId ? { ...a, ...form } : a)));
     } else {
-      setAlunas([...alunas, { id: uid(), ...form }]);
+      const novaId = uid();
+      setAlunas([...alunas, { id: novaId, ...form }]);
+      if (vindoDeExperimental) {
+        setVindoDeExperimental(false);
+        onPrefillConcluido?.(novaId);
+      }
     }
     setShowForm(false);
   }
@@ -588,6 +722,11 @@ function AlunasView({ alunas, setAlunas, turmas }) {
 
       {showForm && (
         <div className="card" style={{ marginBottom: 20 }}>
+          {vindoDeExperimental && (
+            <div style={{ fontSize: 13, color: "#8B4A5C", background: "#F6ECEF", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+              Dados trazidos da aula experimental. Complete o que falta (e-mail, CPF, endereço, nascimento e plano) e salve.
+            </div>
+          )}
           <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
               <label>Nome da aluna</label>
@@ -599,7 +738,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
             </div>
             <div>
               <label>Contato</label>
-              <input value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone / WhatsApp" />
+              <input inputMode="numeric" value={form.contato} onChange={(e) => setForm({ ...form, contato: mascaraTelefone(e.target.value) })} placeholder="(79) 99999-9999" />
             </div>
             <div>
               <label>E-mail do responsável</label>
@@ -607,7 +746,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
             </div>
             <div>
               <label>CPF do responsável</label>
-              <input value={form.cpfResponsavel} onChange={(e) => setForm({ ...form, cpfResponsavel: e.target.value })} placeholder="000.000.000-00" />
+              <input inputMode="numeric" value={form.cpfResponsavel} onChange={(e) => setForm({ ...form, cpfResponsavel: mascaraCPF(e.target.value) })} placeholder="000.000.000-00" />
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <label>Endereço do responsável</label>
@@ -678,7 +817,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button className="btn-primary" onClick={save}>{editId ? "Salvar alterações" : "Adicionar aluna"}</button>
-            <button className="btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+            <button className="btn-ghost" onClick={fecharForm}>Cancelar</button>
           </div>
         </div>
       )}
@@ -751,7 +890,7 @@ function AlunasView({ alunas, setAlunas, turmas }) {
 }
 
 function hojeISO() {
-  return new Date().toISOString().slice(0, 10);
+  return isoLocal(new Date());
 }
 
 function formatarData(iso) {
@@ -759,7 +898,7 @@ function formatarData(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-function PresencasView({ turmas, alunas, presencas, setPresencas }) {
+function PresencasView({ turmas, alunas, presencas, setPresencas, experimentais = [] }) {
   const [modo, setModo] = useState("chamada"); // "chamada" | "historico"
   const [turmaId, setTurmaId] = useState("");
   const [dia, setDia] = useState("");
@@ -776,16 +915,31 @@ function PresencasView({ turmas, alunas, presencas, setPresencas }) {
   const horariosDaTurma = turma ? (turma.horarios || []) : [];
   const sessionId = turmaId && dia && data ? `${turmaId}_${dia}_${data}` : null;
 
+  // aulas experimentais agendadas (aba Experimentais) para esta turma/dia/data
+  function experimentaisDaSessao(jaNaLista) {
+    return experimentais
+      .filter((e) => e.turmaId === turmaId && e.data === data && e.dia === dia && !e.cancelada)
+      .filter((e) => !jaNaLista.some((r) => r.experimentalId === e.id))
+      .map((e) => ({
+        alunaId: null,
+        tipo: "experimental",
+        status: "presente",
+        nomeExperimental: e.nomeAluna,
+        experimentalId: e.id,
+        obs: [e.responsavel && `Resp.: ${e.responsavel}`, e.contato].filter(Boolean).join(" · "),
+      }));
+  }
+
   function carregarSessao() {
     if (!turmaId || !dia || !data) return;
     const existente = presencas.find((p) => p.id === sessionId);
     if (existente) {
-      setRegistros(existente.registros);
+      setRegistros([...existente.registros, ...experimentaisDaSessao(existente.registros)]);
     } else {
       const regulares = alunas
         .filter((a) => a.turmaId === turmaId && (a.diasFrequenta || []).includes(dia))
         .map((a) => ({ alunaId: a.id, tipo: "regular", status: "presente", obs: "" }));
-      setRegistros(regulares);
+      setRegistros([...regulares, ...experimentaisDaSessao([])]);
     }
   }
 
@@ -979,7 +1133,7 @@ function PresencasView({ turmas, alunas, presencas, setPresencas }) {
                     </div>
                     <div>
                       <label>Contato do responsável (opcional)</label>
-                      <input value={expContato} onChange={(e) => setExpContato(e.target.value)} placeholder="Telefone / WhatsApp" />
+                      <input inputMode="numeric" value={expContato} onChange={(e) => setExpContato(mascaraTelefone(e.target.value))} placeholder="(79) 99999-9999" />
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -1001,6 +1155,212 @@ function PresencasView({ turmas, alunas, presencas, setPresencas }) {
               <div style={{ marginTop: 20 }}>
                 <button className="btn-primary" onClick={salvarChamada}>Salvar chamada</button>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExperimentaisView({ turmas, alunas, presencas, experimentais, setExperimentais, onCadastrarAluna }) {
+  const vazio = { turmaId: "", data: "", nomeAluna: "", responsavel: "", contato: "" };
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState(vazio);
+  const [erro, setErro] = useState("");
+  const [mostrarAnteriores, setMostrarAnteriores] = useState(false);
+
+  const turmaForm = turmas.find((t) => t.id === form.turmaId);
+  const diasTurmaForm = turmaForm ? (turmaForm.horarios || []).map((h) => h.dia) : [];
+  const hoje = hojeISO();
+
+  function abrirNova() {
+    setForm(vazio);
+    setEditId(null);
+    setErro("");
+    setShowForm(true);
+  }
+
+  function abrirEdicao(e) {
+    setForm({ turmaId: e.turmaId, data: e.data, nomeAluna: e.nomeAluna, responsavel: e.responsavel || "", contato: e.contato || "" });
+    setEditId(e.id);
+    setErro("");
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function salvar() {
+    if (!form.turmaId) return setErro("Escolha a turma.");
+    if (!form.data) return setErro("Escolha a data da aula.");
+    if (!form.nomeAluna.trim()) return setErro("Informe o nome da aluna.");
+    const dia = diaDaSemana(form.data);
+    if (!diasTurmaForm.includes(dia)) {
+      return setErro(`A turma ${turmaForm.nome} não tem aula na ${dia.toLowerCase()}. Dias da turma: ${diasTurmaForm.join(", ")}.`);
+    }
+    const dados = { ...form, nomeAluna: form.nomeAluna.trim(), dia };
+    if (editId) {
+      setExperimentais(experimentais.map((e) => (e.id === editId ? { ...e, ...dados } : e)));
+    } else {
+      setExperimentais([...experimentais, { id: uid(), ...dados, criadaEm: hoje }]);
+    }
+    setShowForm(false);
+  }
+
+  function remover(id) {
+    if (!window.confirm("Remover esta aula experimental?")) return;
+    setExperimentais(experimentais.filter((e) => e.id !== id));
+  }
+
+  // o que aconteceu na chamada daquele dia
+  function situacao(e) {
+    if (e.alunaId) return { txt: "Matriculada", cor: "#4C7A44", bg: "#E8F0E5" };
+    const sessao = presencas.find((p) => p.id === `${e.turmaId}_${e.dia}_${e.data}`);
+    const reg = sessao?.registros.find((r) => r.experimentalId === e.id);
+    if (reg) {
+      return reg.status === "presente"
+        ? { txt: "Compareceu", cor: "#4C7A44", bg: "#E8F0E5" }
+        : { txt: "Faltou", cor: "#A3403F", bg: "#FBEAEA" };
+    }
+    if (e.data === hoje) return { txt: "Hoje", cor: "#8A6416", bg: "#FBF1DD" };
+    if (e.data > hoje) return { txt: "Agendada", cor: "#8B4A5C", bg: "#F6ECEF" };
+    return { txt: "Sem chamada", cor: "#A89C97", bg: "#F1EDE8" };
+  }
+
+  const ordenar = (a, b) => (a.data + (a.nomeAluna || "")).localeCompare(b.data + (b.nomeAluna || ""));
+  const proximas = experimentais.filter((e) => e.data >= hoje).sort(ordenar);
+  const anteriores = experimentais.filter((e) => e.data < hoje).sort(ordenar).reverse();
+
+  function Cartao({ e }) {
+    const turma = turmas.find((t) => t.id === e.turmaId);
+    const horario = (turma?.horarios || []).find((h) => h.dia === e.dia)?.horario;
+    const sit = situacao(e);
+    const wa = linkWhatsApp(e.contato);
+    const alunaCadastrada = e.alunaId && alunas.find((a) => a.id === e.alunaId);
+    return (
+      <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>
+            {e.nomeAluna}
+            <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 600, color: sit.cor, background: sit.bg, borderRadius: 10, padding: "2px 9px" }}>
+              {sit.txt}
+            </span>
+          </div>
+          <div style={{ fontSize: 13, color: "#6B615D", marginTop: 3 }}>
+            {e.responsavel && `Resp.: ${e.responsavel}`}
+            {e.contato && (
+              <>
+                {e.responsavel ? " · " : ""}
+                {wa ? <a href={wa} target="_blank" rel="noreferrer" style={{ color: "#6B615D" }}>{e.contato}</a> : e.contato}
+              </>
+            )}
+          </div>
+          <div style={{ fontSize: 12.5, marginTop: 4, color: turma ? "#8B4A5C" : "#A89C97" }}>
+            {e.dia}, {formatarData(e.data)}{horario ? ` · ${horario}` : ""} · {turma ? `[${turma.modalidade || "PVB"}] ${turma.nome}` : "Turma removida"}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {!alunaCadastrada && (
+            <button className="btn-text" style={{ color: "#8B4A5C", fontWeight: 600 }} onClick={() => onCadastrarAluna(e)}>
+              Cadastrar como aluna
+            </button>
+          )}
+          <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => abrirEdicao(e)}>Editar</button>
+          <button className="btn-text" style={{ color: "#A3403F" }} onClick={() => remover(e.id)}>Remover</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <h2 className="display" style={{ fontSize: 18, margin: 0 }}>Aulas experimentais</h2>
+        {!showForm && <button className="btn-primary" onClick={abrirNova}>+ Nova aula experimental</button>}
+      </div>
+
+      {showForm && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Turma</label>
+              <select value={form.turmaId} onChange={(ev) => { setForm({ ...form, turmaId: ev.target.value, data: "" }); setErro(""); }}>
+                <option value="">Selecione a turma</option>
+                {turmas.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    [{t.modalidade || "PVB"}] {t.nome} · {(t.horarios || []).map((h) => h.dia + (h.horario ? ` ${h.horario}` : "")).join(" e ")}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Data da aula</label>
+              {turmaForm && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {proximasDatasDaTurma(turmaForm).map((iso) => (
+                    <button
+                      key={iso}
+                      type="button"
+                      onClick={() => { setForm({ ...form, data: iso }); setErro(""); }}
+                      style={{
+                        border: "none", borderRadius: 20, padding: "6px 12px", fontSize: 12.5, fontWeight: 600,
+                        background: form.data === iso ? "#2E2A2C" : "#F1EDE8",
+                        color: form.data === iso ? "#fff" : "#6B615D",
+                      }}
+                    >
+                      {diaDaSemana(iso).slice(0, 3)} {formatarData(iso).slice(0, 5)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <input
+                type="date"
+                style={{ maxWidth: 220 }}
+                value={form.data}
+                disabled={!form.turmaId}
+                onChange={(ev) => { setForm({ ...form, data: ev.target.value }); setErro(""); }}
+              />
+            </div>
+            <div>
+              <label>Nome da aluna</label>
+              <input value={form.nomeAluna} onChange={(ev) => setForm({ ...form, nomeAluna: ev.target.value })} placeholder="Nome completo" />
+            </div>
+            <div>
+              <label>Nome do responsável</label>
+              <input value={form.responsavel} onChange={(ev) => setForm({ ...form, responsavel: ev.target.value })} placeholder="Nome do responsável" />
+            </div>
+            <div>
+              <label>Telefone do responsável</label>
+              <input inputMode="numeric" value={form.contato} onChange={(ev) => setForm({ ...form, contato: mascaraTelefone(ev.target.value) })} placeholder="(79) 99999-9999" />
+            </div>
+          </div>
+          {erro && <div style={{ fontSize: 13, color: "#A3403F", marginTop: 12 }}>{erro}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="btn-primary" onClick={salvar}>{editId ? "Salvar alterações" : "Agendar aula experimental"}</button>
+            <button className="btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#6B615D", margin: "4px 0 10px" }}>
+        Próximas aulas ({proximas.length})
+      </div>
+      {proximas.length === 0 ? (
+        <EmptyState text="Nenhuma aula experimental agendada." />
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {proximas.map((e) => <Cartao key={e.id} e={e} />)}
+        </div>
+      )}
+
+      {anteriores.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <button className="btn-ghost" onClick={() => setMostrarAnteriores(!mostrarAnteriores)}>
+            {mostrarAnteriores ? "Ocultar" : "Ver"} aulas anteriores ({anteriores.length})
+          </button>
+          {mostrarAnteriores && (
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              {anteriores.map((e) => <Cartao key={e.id} e={e} />)}
             </div>
           )}
         </div>
