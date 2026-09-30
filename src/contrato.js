@@ -115,11 +115,13 @@ async function chamarAutentique(payload) {
 }
 
 // Gera o contrato preenchido e envia para assinatura do responsável na Autentique.
-export async function enviarContratoAutentique(aluna, turma) {
+// substituirId: documento anterior (ainda não assinado) que deve ser cancelado na Autentique.
+export async function enviarContratoAutentique(aluna, turma, substituirId = null) {
   const blob = await gerarContratoBlob(aluna, turma);
   const arquivoBase64 = await blobToBase64(blob);
   return chamarAutentique({
     acao: "enviar",
+    substituirId,
     nomeDocumento: `Contrato - ${aluna.nome}`,
     nomeArquivo: `Contrato - ${aluna.nome}.docx`,
     arquivoBase64,

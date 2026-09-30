@@ -1753,11 +1753,16 @@ function ContratosView({ alunas, turmas, contratos, setContratos }) {
     if (!aluna.responsavel || !aluna.endereco) {
       if (!window.confirm("Faltam dados da contratante (nome e/ou endereço). Enviar mesmo assim, com esses campos em branco?")) return;
     }
-    if (!window.confirm(`Enviar o contrato de ${aluna.nome} para assinatura de ${aluna.email}?`)) return;
+    const anterior = contratoDe(aluna.id);
+    const substituirId = anterior?.autentiqueId && anterior.status === "pendente" ? anterior.autentiqueId : null;
+    const pergunta = substituirId && !anterior.autentiqueRecusado
+      ? `Reenviar o contrato de ${aluna.nome} para ${aluna.email}?\n\nO contrato enviado antes será cancelado na Autentique (o link antigo deixa de funcionar) e um novo será gerado com os dados atuais do cadastro.`
+      : `Enviar o contrato de ${aluna.nome} para assinatura de ${aluna.email}?`;
+    if (!window.confirm(pergunta)) return;
     setEnviandoId(aluna.id);
     try {
       const turma = turmas.find((t) => t.id === aluna.turmaId);
-      const r = await enviarContratoAutentique(aluna, turma);
+      const r = await enviarContratoAutentique(aluna, turma, substituirId);
       const existente = contratoDe(aluna.id);
       const registro = {
         ...(existente || {}),
@@ -1773,7 +1778,12 @@ function ContratosView({ alunas, turmas, contratos, setContratos }) {
         autentiqueSandbox: !!r.sandbox,
       };
       setContratos([...contratos.filter((c) => c.alunaId !== aluna.id), registro]);
-      setAvisoAutentique(`Contrato de ${aluna.nome} enviado para ${aluna.email}.`);
+      let aviso = `Contrato de ${aluna.nome} enviado para ${aluna.email}.`;
+      if (substituirId && r.anteriorCancelado) aviso += " O contrato anterior foi cancelado na Autentique.";
+      if (substituirId && r.anteriorCancelado === false && !anterior.autentiqueSandbox) {
+        aviso += " Atenção: não consegui cancelar o contrato anterior; exclua-o manualmente no painel da Autentique.";
+      }
+      setAvisoAutentique(aviso);
     } catch (err) {
       window.alert("Não foi possível enviar para a Autentique: " + err.message);
     }
@@ -1950,9 +1960,13 @@ function ContratosView({ alunas, turmas, contratos, setContratos }) {
                       <span style={{ fontSize: 12.5, fontWeight: 600, background: info.bg, color: info.fg, borderRadius: 20, padding: "5px 12px" }}>
                         {info.label}
                       </span>
-                      {!editando && (!c || c.status !== "ativo") && (!c?.autentiqueId || c.autentiqueRecusado || c.status !== "pendente") && (
+                      {!editando && (!c || c.status !== "ativo") && (
                         <button className="btn-text" style={{ color: "#8B4A5C" }} onClick={() => enviarParaAssinatura(a)} disabled={enviandoId === a.id}>
-                          {enviandoId === a.id ? "Enviando..." : c?.autentiqueRecusado ? "Reenviar p/ assinatura" : "Enviar p/ assinatura"}
+                          {enviandoId === a.id
+                            ? "Enviando..."
+                            : c?.autentiqueId && c.status === "pendente"
+                              ? "Reenviar contrato"
+                              : "Enviar p/ assinatura"}
                         </button>
                       )}
                       {!editando && (
