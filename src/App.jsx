@@ -624,7 +624,7 @@ function AlunasView({ alunas, setAlunas, turmas, prefill, onPrefillConcluido }) 
   }
 
   function emptyAluna() {
-    return { nome: "", responsavel: "", contato: "", email: "", cpfResponsavel: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal" };
+    return { nome: "", responsavel: "", contato: "", email: "", cpfResponsavel: "", endereco: "", dataNascimento: "", turmaId: "", diasFrequenta: [], desconto: "", descontoMotivo: "", plano: "mensal", tamanhoCollant: "", tamanhoSapatilha: "" };
   }
 
   function openNew() {
@@ -647,6 +647,8 @@ function AlunasView({ alunas, setAlunas, turmas, prefill, onPrefillConcluido }) 
       desconto: a.desconto || "",
       descontoMotivo: a.descontoMotivo || "",
       plano: a.plano || "mensal",
+      tamanhoCollant: a.tamanhoCollant || "",
+      tamanhoSapatilha: a.tamanhoSapatilha || "",
     });
     setEditId(a.id);
     setShowForm(true);
@@ -755,6 +757,16 @@ function AlunasView({ alunas, setAlunas, turmas, prefill, onPrefillConcluido }) 
             <div>
               <label>Data de nascimento</label>
               <input type="date" value={form.dataNascimento} onChange={(e) => setForm({ ...form, dataNascimento: e.target.value })} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label>Tamanho do collant</label>
+                <input value={form.tamanhoCollant} onChange={(e) => setForm({ ...form, tamanhoCollant: e.target.value.toUpperCase() })} placeholder="Ex.: 6, 8, P, M" />
+              </div>
+              <div>
+                <label>Tamanho da sapatilha</label>
+                <input value={form.tamanhoSapatilha} onChange={(e) => setForm({ ...form, tamanhoSapatilha: e.target.value })} placeholder="Ex.: 28" />
+              </div>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <label>Turma</label>
@@ -874,6 +886,11 @@ function AlunasView({ alunas, setAlunas, turmas, prefill, onPrefillConcluido }) 
                     {` · Plano ${planoInfo(a.plano).label.toLowerCase()}`}
                     {a.desconto ? ` · ${a.desconto}% de desconto${a.descontoMotivo ? ` (${a.descontoMotivo})` : ""}` : ""}
                   </div>
+                  {(a.tamanhoCollant || a.tamanhoSapatilha) && (
+                    <div style={{ fontSize: 12.5, marginTop: 3, color: "#6B615D" }}>
+                      {[a.tamanhoCollant && `Collant ${a.tamanhoCollant}`, a.tamanhoSapatilha && `Sapatilha ${a.tamanhoSapatilha}`].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button className="btn-text" style={{ color: "#6B615D" }} onClick={() => handleGerarContrato(a, turma)}>Gerar contrato</button>
